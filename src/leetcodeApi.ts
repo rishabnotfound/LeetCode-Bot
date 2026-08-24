@@ -54,13 +54,50 @@ export async function fetchDailyChallenge(): Promise<DailyChallenge> {
   };
 }
 
+// Language tag used in `questionSolutions.languageTags` -> LeetCode submit `lang` value.
+// - detectPattern: relaxed check that this is *some* code in the language
+// - requiredPattern: strict check that it's a full LeetCode-submittable answer (has Solution class/impl)
+// Priority (lower = preferred when votes tie): most self-contained/cleanest submit format wins.
+export const LANGUAGES: {
+  tag: string;
+  submitLang: string;
+  priority: number;
+  detectPattern: RegExp;
+  requiredPattern: RegExp;
+}[] = [
+  { tag: "python3", submitLang: "python3", priority: 1, detectPattern: /def\s+\w+\s*\(|class\s+Solution/, requiredPattern: /class\s+Solution\s*:/ },
+  { tag: "java", submitLang: "java", priority: 2, detectPattern: /public\s+(class|int|void|List|String|boolean)/, requiredPattern: /class\s+Solution\b/ },
+  { tag: "cpp", submitLang: "cpp", priority: 3, detectPattern: /vector<|#include|int\s+\w+\s*\(/, requiredPattern: /class\s+Solution\s*\{/ },
+  { tag: "javascript", submitLang: "javascript", priority: 4, detectPattern: /var\s+\w+\s*=\s*function|const\s+\w+\s*=\s*\(|function\s+\w+\s*\(/, requiredPattern: /var\s+\w+\s*=\s*function|=\s*function\s*\(/ },
+  { tag: "typescript", submitLang: "typescript", priority: 5, detectPattern: /function\s+\w+\s*\(|const\s+\w+\s*:\s*|=>\s*/, requiredPattern: /function\s+\w+\s*\(/ },
+  { tag: "golang", submitLang: "golang", priority: 6, detectPattern: /func\s+\w+\s*\(/, requiredPattern: /func\s+\w+\s*\(/ },
+  { tag: "csharp", submitLang: "csharp", priority: 7, detectPattern: /public\s+class\s+Solution|using\s+System/, requiredPattern: /public\s+class\s+Solution\b/ },
+  { tag: "ruby", submitLang: "ruby", priority: 8, detectPattern: /def\s+\w+|class\s+Solution/, requiredPattern: /class\s+Solution\b/ },
+  { tag: "rust", submitLang: "rust", priority: 9, detectPattern: /impl\s+Solution|fn\s+\w+\s*\(/, requiredPattern: /impl\s+Solution\b/ },
+  { tag: "kotlin", submitLang: "kotlin", priority: 10, detectPattern: /class\s+Solution|fun\s+\w+\s*\(/, requiredPattern: /class\s+Solution\b/ },
+];
+
+const FENCED_LANG_ALIASES: Record<string, string> = {
+  py: "python3", python: "python3", python3: "python3",
+  "c++": "cpp", cpp: "cpp", cxx: "cpp",
+  java: "java",
+  js: "javascript", javascript: "javascript",
+  ts: "typescript", typescript: "typescript",
+  go: "golang", golang: "golang",
+  cs: "csharp", csharp: "csharp", "c#": "csharp",
+  rb: "ruby", ruby: "ruby",
+  rs: "rust", rust: "rust",
+  kt: "kotlin", kotlin: "kotlin",
+};
+
 export type SolutionPost = {
   topicId: string;
   title: string;
   votes: number;
+  language: string; // language tag used in the query
 };
 
-export async function fetchTopSolutions(questionSlug: string, language = "python3"): Promise<SolutionPost[]> {
+async function queryTopSolutions(questionSlug: string, languageTag?: string): Promise<Omit<SolutionPost, "language">[]> {
   const query = `
     query communitySolutions(
       $questionSlug: String!
@@ -77,9 +114,7 @@ export async function fetchTopSolutions(questionSlug: string, language = "python
           orderBy: $orderBy
           languageTags: $languageTags
         }
-      ) {
-        solutions { id title post { voteCount } }
-      }
+      ) { solutions { id title post { voteCount } } }
     }
   `;
   const data = await gql<{
@@ -89,9 +124,9 @@ export async function fetchTopSolutions(questionSlug: string, language = "python
   }>(query, {
     questionSlug,
     skip: 0,
-    first: 15,
+    first: 10,
     orderBy: "most_votes",
-    languageTags: [language],
+    languageTags: languageTag ? [languageTag] : [],
   });
   return data.questionSolutions.solutions.map((s) => ({
     topicId: String(s.id),
@@ -111,25 +146,66 @@ export async function fetchSolutionBody(topicId: string): Promise<string> {
   return data.ugcArticleSolutionArticle.content;
 }
 
-const LANG_TAGGED = /```(?:python3?|py)\s*\n([\s\S]*?)```/i;
-const UNTAGGED = /```\s*\n([\s\S]*?)```/;
-
-export function extractPythonCode(markdown: string): string | null {
+// Extract every fenced code block from a post that looks like a submittable LeetCode answer
+// (i.e. matches the language's requiredPattern — has `class Solution` etc.).
+export function extractSubmittableBlocks(markdown: string): { code: string; lang: string }[] {
   const normalized = markdown.replace(/\\n/g, "\n");
-  const tagged = normalized.match(LANG_TAGGED);
-  if (tagged) return tagged[1].trim();
-  const untagged = normalized.match(UNTAGGED);
-  if (untagged && /class\s+Solution|def\s+\w+\s*\(/.test(untagged[1])) return untagged[1].trim();
-  return null;
+  const fenceRe = /```([a-zA-Z0-9+#]*)\s*\n([\s\S]*?)```/g;
+  const results: { code: string; lang: string }[] = [];
+  let m: RegExpExecArray | null;
+
+  while ((m = fenceRe.exec(normalized)) !== null) {
+    const tag = m[1].trim().toLowerCase();
+    const body = m[2].trim();
+    if (!body) continue;
+
+    if (tag) {
+      const alias = FENCED_LANG_ALIASES[tag];
+      const langDef = alias ? LANGUAGES.find((l) => l.tag === alias) : undefined;
+      if (langDef && langDef.requiredPattern.test(body)) {
+        results.push({ code: body, lang: langDef.submitLang });
+      }
+    } else {
+      // Untagged fence — sniff by detectPattern *and* require full submittable form
+      for (const langDef of LANGUAGES) {
+        if (langDef.detectPattern.test(body) && langDef.requiredPattern.test(body)) {
+          results.push({ code: body, lang: langDef.submitLang });
+          break;
+        }
+      }
+    }
+  }
+  return results;
 }
 
-export async function pickBestPythonSolution(slug: string): Promise<{ code: string; source: SolutionPost }> {
-  const posts = await fetchTopSolutions(slug, "python3");
-  if (!posts.length) throw new Error(`No Python3 community solutions found for ${slug}`);
-  for (const post of posts) {
+export async function pickBestSolution(slug: string): Promise<{ code: string; lang: string; source: SolutionPost }> {
+  // Fetch top solutions for every language in parallel.
+  const perLangResults = await Promise.all(
+    LANGUAGES.map(async (lang) => {
+      const posts = await queryTopSolutions(slug, lang.tag).catch(() => []);
+      return posts.map((p) => ({ ...p, language: lang.tag }));
+    }),
+  );
+
+  // Rank: highest votes first, tiebreaker by language priority (python3 wins ties).
+  const allPosts = perLangResults.flat().sort((a, b) => {
+    if (b.votes !== a.votes) return b.votes - a.votes;
+    const pa = LANGUAGES.find((l) => l.tag === a.language)?.priority ?? 99;
+    const pb = LANGUAGES.find((l) => l.tag === b.language)?.priority ?? 99;
+    return pa - pb;
+  });
+  if (!allPosts.length) throw new Error(`No community solutions found for ${slug}`);
+
+  for (const post of allPosts) {
     const body = await fetchSolutionBody(post.topicId);
-    const code = extractPythonCode(body);
-    if (code) return { code, source: post };
+    const blocks = extractSubmittableBlocks(body);
+    if (!blocks.length) continue;
+
+    // Prefer the block matching the language the post was tagged with, else first submittable block.
+    const langDef = LANGUAGES.find((l) => l.tag === post.language);
+    const preferred = langDef && blocks.find((b) => b.lang === langDef.submitLang);
+    const chosen = preferred ?? blocks[0];
+    return { code: chosen.code, lang: chosen.lang, source: post };
   }
-  throw new Error(`Found ${posts.length} Python3 posts for ${slug} but none had an extractable code block`);
+  throw new Error(`Found ${allPosts.length} posts for ${slug} but none had a submittable code block`);
 }

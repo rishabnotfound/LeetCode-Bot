@@ -4,13 +4,14 @@ const UA =
 type Cookies = {
   LEETCODE_SESSION: string;
   csrftoken: string;
-  cf_clearance?: string;
 };
 
+function clean(v: string): string {
+  return v.replace(/[\r\n\t\s]+/g, "").trim();
+}
+
 function cookieHeader(c: Cookies): string {
-  const parts = [`LEETCODE_SESSION=${c.LEETCODE_SESSION}`, `csrftoken=${c.csrftoken}`];
-  if (c.cf_clearance) parts.push(`cf_clearance=${c.cf_clearance}`);
-  return parts.join("; ");
+  return `LEETCODE_SESSION=${clean(c.LEETCODE_SESSION)}; csrftoken=${clean(c.csrftoken)}`;
 }
 
 export type UserStatus = { isSignedIn: boolean; username: string };
@@ -23,7 +24,7 @@ export async function userStatus(c: Cookies): Promise<UserStatus> {
       "User-Agent": UA,
       Referer: "https://leetcode.com/",
       Cookie: cookieHeader(c),
-      "x-csrftoken": c.csrftoken,
+      "x-csrftoken": clean(c.csrftoken),
     },
     body: JSON.stringify({ query: "query { userStatus { isSignedIn username } }" }),
   });
@@ -50,7 +51,7 @@ export async function submit(
       Origin: "https://leetcode.com",
       Referer: `https://leetcode.com/problems/${slug}/description/?envType=daily-question`,
       Cookie: cookieHeader(c),
-      "x-csrftoken": c.csrftoken,
+      "x-csrftoken": clean(c.csrftoken),
     },
     body: JSON.stringify({ lang, question_id: questionId, typed_code: code }),
   });
@@ -82,7 +83,7 @@ export async function check(c: Cookies, submissionId: number): Promise<CheckResp
       "User-Agent": UA,
       Referer: "https://leetcode.com/",
       Cookie: cookieHeader(c),
-      "x-csrftoken": c.csrftoken,
+      "x-csrftoken": clean(c.csrftoken),
     },
   });
   if (!res.ok) throw new Error(`check HTTP ${res.status}: ${await res.text()}`);

@@ -17,7 +17,6 @@ jobs:
     env:
       LEETCODE_SESSION: ${{ secrets.LEETCODE_SESSION }}
       LEETCODE_CSRFTOKEN: ${{ secrets.LEETCODE_CSRFTOKEN }}
-      LEETCODE_CF_CLEARANCE: ${{ secrets.LEETCODE_CF_CLEARANCE }}
     steps:
       - uses: actions/checkout@v4
 

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { fetchDailyChallenge, pickBestPythonSolution } from "./leetcodeApi.js";
+import { fetchDailyChallenge, pickBestSolution } from "./leetcodeApi.js";
 import { userStatus, submit, waitForVerdict } from "./submitApi.js";
 
 function requireEnv(name: string): string {
@@ -12,7 +12,6 @@ async function main() {
   const cookies = {
     LEETCODE_SESSION: requireEnv("LEETCODE_SESSION"),
     csrftoken: requireEnv("LEETCODE_CSRFTOKEN"),
-    cf_clearance: process.env.LEETCODE_CF_CLEARANCE,
   };
 
   console.log("→ Checking auth…");
@@ -24,13 +23,13 @@ async function main() {
   const daily = await fetchDailyChallenge();
   console.log(`  ${daily.date} · ${daily.title} · ${daily.url}`);
 
-  console.log("→ Finding top-voted Python3 community solution…");
-  const { code, source } = await pickBestPythonSolution(daily.slug);
-  console.log(`  "${source.title}" (${source.votes} votes)`);
+  console.log("→ Finding top-voted community solution (any language)…");
+  const { code, lang, source } = await pickBestSolution(daily.slug);
+  console.log(`  "${source.title}" · ${lang} · ${source.votes} votes`);
   console.log(`  ${code.split("\n").length} lines`);
 
-  console.log("→ Submitting…");
-  const { submission_id } = await submit(cookies, daily.slug, daily.questionId, code);
+  console.log(`→ Submitting as ${lang}…`);
+  const { submission_id } = await submit(cookies, daily.slug, daily.questionId, code, lang);
   console.log(`  submission_id=${submission_id}`);
 
   console.log("→ Waiting for verdict…");
