@@ -1,0 +1,33 @@
+name: LeetCode Daily
+
+on:
+  schedule:
+    # 00:15 UTC every day — LeetCode rolls the daily at 00:00 UTC.
+    - cron: "15 0 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: leetcode-daily
+  cancel-in-progress: false
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LEETCODE_SESSION: ${{ secrets.LEETCODE_SESSION }}
+      LEETCODE_CSRFTOKEN: ${{ secrets.LEETCODE_CSRFTOKEN }}
+      LEETCODE_CF_CLEARANCE: ${{ secrets.LEETCODE_CF_CLEARANCE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run bot
+        run: npm start

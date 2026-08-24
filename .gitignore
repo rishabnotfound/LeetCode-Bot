@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.local
+storage-state.json
+artifacts/
+*.log
+.claude
