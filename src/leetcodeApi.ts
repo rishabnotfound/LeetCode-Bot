@@ -97,7 +97,10 @@ export type SolutionPost = {
   language: string; // language tag used in the query
 };
 
-async function queryTopSolutions(questionSlug: string, languageTag?: string): Promise<Omit<SolutionPost, "language">[]> {
+// Primary endpoint: the older `questionSolutions` GraphQL. Fast and simple,
+// but returns 0 results for newer problems (LeetCode moved recent posts to
+// the UGC pipeline). Fallback below handles those.
+async function queryTopSolutionsLegacy(questionSlug: string, languageTag?: string): Promise<Omit<SolutionPost, "language">[]> {
   const query = `
     query communitySolutions(
       $questionSlug: String!
@@ -133,6 +136,52 @@ async function queryTopSolutions(questionSlug: string, languageTag?: string): Pr
     title: s.title,
     votes: s.post.voteCount,
   }));
+}
+
+// Fallback endpoint: the newer `ugcArticleSolutionArticles` GraphQL that
+// LeetCode's own frontend uses. Handles brand-new problems where the legacy
+// query returns nothing.
+async function queryTopSolutionsUgc(questionSlug: string, languageTag?: string): Promise<Omit<SolutionPost, "language">[]> {
+  const query = `
+    query ugcArticleSolutionArticles(
+      $questionSlug: String!
+      $orderBy: ArticleOrderByEnum
+      $skip: Int
+      $first: Int
+      $tagSlugs: [String!]
+    ) {
+      ugcArticleSolutionArticles(
+        questionSlug: $questionSlug
+        orderBy: $orderBy
+        skip: $skip
+        first: $first
+        tagSlugs: $tagSlugs
+      ) {
+        edges { node { topicId title reactions { count reactionType } } }
+      }
+    }
+  `;
+  const data = await gql<{
+    ugcArticleSolutionArticles: {
+      edges: { node: { topicId: number; title: string; reactions: { count: number; reactionType: string }[] } }[];
+    };
+  }>(query, {
+    questionSlug,
+    orderBy: "HOT",
+    skip: 0,
+    first: 15,
+    tagSlugs: languageTag ? [languageTag] : [],
+  });
+  return data.ugcArticleSolutionArticles.edges.map((e) => {
+    const upvotes = e.node.reactions.find((r) => r.reactionType === "UPVOTE")?.count ?? 0;
+    return { topicId: String(e.node.topicId), title: e.node.title, votes: upvotes };
+  });
+}
+
+async function queryTopSolutions(questionSlug: string, languageTag?: string): Promise<Omit<SolutionPost, "language">[]> {
+  const legacy = await queryTopSolutionsLegacy(questionSlug, languageTag).catch(() => []);
+  if (legacy.length) return legacy;
+  return queryTopSolutionsUgc(questionSlug, languageTag).catch(() => []);
 }
 
 export async function fetchSolutionBody(topicId: string): Promise<string> {
