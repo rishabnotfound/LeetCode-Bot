@@ -197,8 +197,20 @@ export async function fetchSolutionBody(topicId: string): Promise<string> {
 
 // Extract every fenced code block from a post that looks like a submittable LeetCode answer
 // (i.e. matches the language's requiredPattern — has `class Solution` etc.).
+// LeetCode's article API sometimes double-encodes JSON escape sequences into
+// the markdown body (e.g. `\'`, `\"`, `\\n`). Undo those so the code compiles.
+function decodeArticleEscapes(s: string): string {
+  return s
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\");
+}
+
 export function extractSubmittableBlocks(markdown: string): { code: string; lang: string }[] {
-  const normalized = markdown.replace(/\\n/g, "\n");
+  const normalized = decodeArticleEscapes(markdown);
   const fenceRe = /```([a-zA-Z0-9+#]*)\s*\n([\s\S]*?)```/g;
   const results: { code: string; lang: string }[] = [];
   let m: RegExpExecArray | null;
