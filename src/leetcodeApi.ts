@@ -209,6 +209,24 @@ function decodeArticleEscapes(s: string): string {
     .replace(/\\\\/g, "\\");
 }
 
+// Some posts (especially copied from rich-text editors) contain non-breaking
+// spaces, zero-width joiners, smart quotes, etc. that break compilers.
+// Normalize them to plain ASCII equivalents.
+function sanitizeCode(s: string): string {
+  return s
+    .replace(/\u00A0/g, " ")   // non-breaking space
+    .replace(/\u200B/g, "")    // zero-width space
+    .replace(/\u200C/g, "")    // zero-width non-joiner
+    .replace(/\u200D/g, "")    // zero-width joiner
+    .replace(/\uFEFF/g, "")    // BOM / zero-width no-break space
+    .replace(/[\u2018\u2019]/g, "'")   // smart single quotes
+    .replace(/[\u201C\u201D]/g, '"')   // smart double quotes
+    .replace(/\u2013/g, "-")   // en dash
+    .replace(/\u2014/g, "-")   // em dash
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
 export function extractSubmittableBlocks(markdown: string): { code: string; lang: string }[] {
   const normalized = decodeArticleEscapes(markdown);
   const fenceRe = /```([a-zA-Z0-9+#]*)\s*\n([\s\S]*?)```/g;
@@ -224,13 +242,13 @@ export function extractSubmittableBlocks(markdown: string): { code: string; lang
       const alias = FENCED_LANG_ALIASES[tag];
       const langDef = alias ? LANGUAGES.find((l) => l.tag === alias) : undefined;
       if (langDef && langDef.requiredPattern.test(body)) {
-        results.push({ code: body, lang: langDef.submitLang });
+        results.push({ code: sanitizeCode(body), lang: langDef.submitLang });
       }
     } else {
       // Untagged fence — sniff by detectPattern *and* require full submittable form
       for (const langDef of LANGUAGES) {
         if (langDef.detectPattern.test(body) && langDef.requiredPattern.test(body)) {
-          results.push({ code: body, lang: langDef.submitLang });
+          results.push({ code: sanitizeCode(body), lang: langDef.submitLang });
           break;
         }
       }
@@ -239,7 +257,9 @@ export function extractSubmittableBlocks(markdown: string): { code: string; lang
   return results;
 }
 
-export async function pickBestSolution(slug: string): Promise<{ code: string; lang: string; source: SolutionPost }> {
+export type Candidate = { code: string; lang: string; source: SolutionPost };
+
+export async function pickCandidateSolutions(slug: string, maxCandidates = 5): Promise<Candidate[]> {
   // Fetch top solutions for every language in parallel.
   const perLangResults = await Promise.all(
     LANGUAGES.map(async (lang) => {
@@ -257,16 +277,24 @@ export async function pickBestSolution(slug: string): Promise<{ code: string; la
   });
   if (!allPosts.length) throw new Error(`No community solutions found for ${slug}`);
 
+  const candidates: Candidate[] = [];
+  const seenTopics = new Set<string>();
+
   for (const post of allPosts) {
-    const body = await fetchSolutionBody(post.topicId);
+    if (candidates.length >= maxCandidates) break;
+    if (seenTopics.has(post.topicId)) continue;
+    seenTopics.add(post.topicId);
+
+    const body = await fetchSolutionBody(post.topicId).catch(() => "");
+    if (!body) continue;
     const blocks = extractSubmittableBlocks(body);
     if (!blocks.length) continue;
 
-    // Prefer the block matching the language the post was tagged with, else first submittable block.
     const langDef = LANGUAGES.find((l) => l.tag === post.language);
     const preferred = langDef && blocks.find((b) => b.lang === langDef.submitLang);
     const chosen = preferred ?? blocks[0];
-    return { code: chosen.code, lang: chosen.lang, source: post };
+    candidates.push({ code: chosen.code, lang: chosen.lang, source: post });
   }
-  throw new Error(`Found ${allPosts.length} posts for ${slug} but none had a submittable code block`);
+  if (!candidates.length) throw new Error(`Found ${allPosts.length} posts for ${slug} but none had a submittable code block`);
+  return candidates;
 }
